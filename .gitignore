@@ -1,0 +1,22 @@
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+.env.*
+
+# Generated database
+data/instamart.db
+
+# Agent state
+state/*.json
+
+# Temporary files
+*.log
+.DS_Store
