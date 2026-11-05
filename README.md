@@ -66,3 +66,83 @@ These public repositories/documentation projects are useful for learning concept
 - The offline mock model is deterministic rule-based simulation, not a real language model.
 - The refund ledger is a local JSONL audit trail, not a real transaction system.
 - Production work would add access controls, secure secret management, monitoring, schema contracts, data lineage, model drift checks and human approval workflows.
+## Part D — Policy RAG Assistant and Refund Agent
+
+### Policy document chunking and retrieval
+
+The five policy documents were split into 40-word chunks with an overlap of 10 words. This produced 15 chunks:
+
+| Policy document | Chunks |
+|---|---:|
+| refund_policy.txt | 4 |
+| delivery_policy.txt | 3 |
+| escalation_policy.txt | 3 |
+| payment_policy.txt | 3 |
+| privacy_policy.txt | 2 |
+| **Total** | **15** |
+
+Retrieval uses `TfidfVectorizer()` and cosine similarity to rank the most relevant chunks. Term Frequency (TF) measures how often a term appears in a document, while Inverse Document Frequency (IDF) gives less weight to terms that appear in many documents. A limitation of TF-IDF is that it relies on word overlap, so different phrasings with the same meaning may not retrieve the same information.
+
+### Retrieval and grounding evaluation
+
+The evaluation used all 14 questions in `data/raw/policy_eval.csv`.
+
+| Evaluation metric | 10-word overlap | Zero overlap |
+|---|---:|---:|
+| Total chunks | 15 | 13 |
+| Expected document retrieved (answerable questions) | 12/12 | 12/12 |
+| Expected fact found in answer | 12/12 | 10/12 |
+| Fallback for unanswerable questions | 2/2 | 2/2 |
+
+With zero overlap, two expected facts were not found:
+
+- **Refund eligibility:** the phrase "more than 45 minutes" was split across a chunk boundary.
+- **Failed payment refund:** the phrase "48 hours" was split across a chunk boundary.
+
+This comparison demonstrates how chunk overlap can preserve information that would otherwise be separated across chunks.
+
+Evaluation outputs:
+- `outputs/policy_eval_overlap10.csv`
+- `outputs/policy_eval_overlap0.csv`
+
+### Refund agent scenarios
+
+The agent uses database lookup, policy retrieval, refund calculation, and either refund issuance or human escalation.
+
+| Scenario | Status | Refund amount (INR) | Model calls | Tokens |
+|---|---|---:|---:|---:|
+| S1 | REFUND | 128.25 | 5 | 859 |
+| S2 | REFUND | 135.00 | 5 | 859 |
+| S3 | ESCALATE | 1999.00 | 5 | 876 |
+| S4 | DENIED | 0.00 | 4 | 583 |
+| S5 | DENIED | 0.00 | 3 | 322 |
+| S6 | NOT_FOUND | 0.00 | 2 | 70 |
+| S7 | FALLBACK_MAX_ITERATIONS | — | 6 | 2988 |
+
+### Safety and recovery demonstrations
+
+| Demonstration | Result |
+|---|---|
+| S1 with token limit 200 | FALLBACK_TOKEN_LIMIT |
+| S1 with time limit 0 seconds | FALLBACK_TIMEOUT |
+| S7 with default token limit 6000 | FALLBACK_MAX_ITERATIONS |
+
+The S1 crash-and-resume test successfully recovered from a simulated crash after the second tool execution. The exact tool sequence across the original run and resume was:
+
+`get_order → search_policy → calculate_refund → issue_refund`
+
+The final result was REFUND for INR 128.25. The refund ledger contains one issuance entry for S1, confirming that the refund was not repeated during recovery.
+
+### ReAct versus plan-and-execute
+
+The ReAct design makes decisions after observing each tool result. In this implementation, S1 required five model calls, S5 required three, and S6 required two. This uses more model calls and tokens than a plan-and-execute approach that requests a complete plan once and replans only when necessary.
+
+However, ReAct can respond to unexpected observations such as a missing order or a cancelled order before attempting the next action. A fixed plan may need additional replanning and stronger safeguards when tool results differ from expectations. For this refund workflow, I would choose ReAct because refund issuance and human escalation require decisions based on verified order data and policy results.
+
+### Outputs
+
+- `outputs/agent_runs.jsonl`
+- `outputs/refund_ledger.jsonl`
+- `outputs/policy_eval_overlap10.csv`
+- `outputs/policy_eval_overlap0.csv`
+- `state/` — saved agent checkpoints
